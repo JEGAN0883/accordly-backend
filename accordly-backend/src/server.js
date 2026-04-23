@@ -47,11 +47,7 @@ const corsOrigins = (process.env.CORS_ORIGINS || 'http://localhost:3001')
   .split(',').map(o => o.trim());
 
 app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin || corsOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
+  origin: true,
     }
   },
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
