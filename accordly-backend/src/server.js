@@ -25,7 +25,7 @@ const professionalRoutes = require('./routes/professional');
 const webhookRoutes = require('./routes/webhooks');
 const healthRoutes = require('./routes/health');
 
-const app = express();
+const app = express();app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
 
 app.use(helmet({
