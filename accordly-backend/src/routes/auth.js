@@ -65,6 +65,26 @@ router.post('/register', authLimiter, [
     );
 
     const user = result.rows[0];
+
+    // ── AUTO-LINK: if someone invited this email as a co-parent before
+    // they signed up, complete that relationship now by filling in
+    // parent_b_id. Only matches relationships still waiting on a partner.
+    try {
+      const linked = await query(
+        `UPDATE coparent_relationships
+         SET parent_b_id = $1
+         WHERE invite_email = $2 AND parent_b_id IS NULL
+         RETURNING id`,
+        [user.id, email]
+      );
+      if (linked.rows.length) {
+        logger.info(`Auto-linked user ${user.id} to relationship ${linked.rows[0].id} via invite_email match`);
+      }
+    } catch (linkErr) {
+      // Don't fail registration if linking has an issue — just log it.
+      logger.error('Co-parent auto-link failed:', linkErr.message);
+    }
+
     const { accessToken, refreshToken } = generateTokens(user.id);
 
     logger.info(`New user registered: ${user.id} (${role})`);
