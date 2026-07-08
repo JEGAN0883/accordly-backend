@@ -28,7 +28,7 @@ const PRICE_TO_PLAN = Object.fromEntries(
 router.post('/create-checkout', authenticate, async (req, res, next) => {
   try {
     const { plan, billing = 'monthly', success_url, cancel_url } = req.body;
-    
+
     // DV waiver holders don't pay
     if (req.user.dv_waiver) {
       return res.status(400).json({ error: 'Your account has a fee waiver — no payment required.' });
@@ -36,7 +36,7 @@ router.post('/create-checkout', authenticate, async (req, res, next) => {
 
     const priceKey = billing === 'annual' ? `${plan}_annual` : `${plan}_monthly`;
     const priceId = PLAN_PRICES[priceKey] || PLAN_PRICES[plan];
-    
+
     if (!priceId) return res.status(400).json({ error: 'Invalid plan' });
 
     // Get or create Stripe customer
@@ -79,7 +79,7 @@ router.get('/subscription', authenticate, async (req, res, next) => {
        FROM users WHERE id = $1`,
       [req.user.id]
     );
-    
+
     const user = result.rows[0];
     let subscriptionDetails = null;
 
@@ -114,7 +114,7 @@ router.post('/cancel', authenticate, async (req, res, next) => {
       'SELECT stripe_subscription_id FROM users WHERE id = $1',
       [req.user.id]
     );
-    
+
     const { stripe_subscription_id } = result.rows[0];
     if (!stripe_subscription_id) {
       return res.status(400).json({ error: 'No active subscription' });
@@ -150,7 +150,7 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
         const plan = session.metadata?.plan;
         if (userId && plan) {
           await query(
-            `UPDATE users SET plan = $1, plan_status = 'active', 
+            `UPDATE users SET plan = $1, plan_status = 'active',
              stripe_subscription_id = $2 WHERE id = $3`,
             [plan, session.subscription, userId]
           );
@@ -161,7 +161,7 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
       case 'invoice.payment_succeeded': {
         const invoice = event.data.object;
         await query(
-          `UPDATE users SET plan_status = 'active' 
+          `UPDATE users SET plan_status = 'active'
            WHERE stripe_subscription_id = $1`,
           [invoice.subscription]
         );
@@ -170,7 +170,7 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
       case 'invoice.payment_failed': {
         const invoice = event.data.object;
         await query(
-          `UPDATE users SET plan_status = 'past_due' 
+          `UPDATE users SET plan_status = 'past_due'
            WHERE stripe_subscription_id = $1`,
           [invoice.subscription]
         );
@@ -179,8 +179,8 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
       case 'customer.subscription.deleted': {
         const sub = event.data.object;
         await query(
-          `UPDATE users SET plan = 'free', plan_status = 'cancelled', 
-           stripe_subscription_id = NULL 
+          `UPDATE users SET plan = 'free', plan_status = 'cancelled',
+           stripe_subscription_id = NULL
            WHERE stripe_subscription_id = $1 AND dv_waiver = FALSE`,
           [sub.id]
         );
@@ -195,44 +195,18 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
   }
 });
 
-
-/**
- * payments.routes.js
- * --------------------------------------------------------
- * Routes for the child_support_payments table.
- *
- * HOW TO WIRE THIS IN (2 things to check/adjust):
- *
- * 1. DB CONNECTION — this file assumes you have a Postgres pool
- *    exported from somewhere like `../db` or `../config/db`, e.g.:
- *        module.exports = new Pool({ connectionString: process.env.DATABASE_URL })
- *    Update the require path on the next non-comment line if yours
- *    lives somewhere else.
- *
- * 2. AUTH MIDDLEWARE — this assumes you already have a JWT-verifying
- *    middleware that sets `req.user = { id: ... }` after checking the
- *    Authorization: Bearer <token> header (your login route already
- *    issues that token). Update the require path below to match
- *    wherever that middleware lives in your project.
- *
- * 3. RELATIONSHIP LOOKUP — child_support_payments rows are scoped by
- *    `relationship_id`, which points at your `coparent_relationships`
- *    table. I don't have that table's column names, so getRelationshipId()
- *    below is a best guess (parent_a_id / parent_b_id). Paste that
- *    table's columns and I'll correct this in one line if it's wrong.
- * --------------------------------------------------------
- */
-
-const express = require('express');
-const router = express.Router();
-
-const db = require('../db');                    // <-- adjust path if needed
-const authenticateToken = require('../middleware/auth'); // <-- adjust path if needed
+// ============================================================
+// CHILD SUPPORT PAYMENT TRACKING
+// (separate from Stripe billing above — this is the co-parent
+// payment ledger feature, using the child_support_payments table)
+// ============================================================
 
 // Look up the coparent_relationships row this user belongs to.
 // ASSUMPTION: columns parent_a_id / parent_b_id link two users together.
+// If your table uses different column names, this is the only
+// function that needs to change.
 async function getRelationshipId(userId) {
-  const result = await db.query(
+  const result = await query(
     `SELECT id FROM coparent_relationships
      WHERE parent_a_id = $1 OR parent_b_id = $1
      LIMIT 1`,
@@ -250,15 +224,15 @@ function deriveStatus(row) {
   return 'pending';
 }
 
-// GET /api/v1/payments — list all payments for the logged-in user's relationship
-router.get('/', authenticateToken, async (req, res) => {
+// GET /api/v1/payments — list all child support payments for the logged-in user's relationship
+router.get('/', authenticate, async (req, res) => {
   try {
     const relationshipId = await getRelationshipId(req.user.id);
     if (!relationshipId) {
       return res.json({ payments: [] }); // no linked co-parent yet
     }
 
-    const result = await db.query(
+    const result = await query(
       `SELECT id, relationship_id, ordered_by_id, amount_ordered, amount_paid,
               due_date, paid_date, status, payment_method, notes,
               created_at, updated_at
@@ -275,8 +249,8 @@ router.get('/', authenticateToken, async (req, res) => {
   }
 });
 
-// POST /api/v1/payments — create a new payment record
-router.post('/', authenticateToken, async (req, res) => {
+// POST /api/v1/payments — create a new child support payment record
+router.post('/', authenticate, async (req, res) => {
   try {
     const { amount_ordered, due_date, payment_method, notes } = req.body;
 
@@ -289,7 +263,7 @@ router.post('/', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'No linked co-parent relationship found for this account.' });
     }
 
-    const result = await db.query(
+    const result = await query(
       `INSERT INTO child_support_payments
          (relationship_id, ordered_by_id, amount_ordered, amount_paid, due_date, status, payment_method, notes, created_at, updated_at)
        VALUES ($1, $2, $3, 0, $4, 'pending', $5, $6, NOW(), NOW())
@@ -305,14 +279,13 @@ router.post('/', authenticateToken, async (req, res) => {
 });
 
 // PATCH /api/v1/payments/:id — record a payment (amount_paid / paid_date) or edit fields
-router.patch('/:id', authenticateToken, async (req, res) => {
+router.patch('/:id', authenticate, async (req, res) => {
   try {
     const { id } = req.params;
     const { amount_paid, paid_date, amount_ordered, due_date, payment_method, notes } = req.body;
 
-    // Fetch existing row first (also confirms it belongs to this user's relationship)
     const relationshipId = await getRelationshipId(req.user.id);
-    const existing = await db.query(
+    const existing = await query(
       `SELECT * FROM child_support_payments WHERE id = $1 AND relationship_id = $2`,
       [id, relationshipId]
     );
@@ -331,7 +304,7 @@ router.patch('/:id', authenticateToken, async (req, res) => {
     };
     merged.status = deriveStatus(merged);
 
-    const result = await db.query(
+    const result = await query(
       `UPDATE child_support_payments
        SET amount_paid = $1, paid_date = $2, amount_ordered = $3, due_date = $4,
            payment_method = $5, notes = $6, status = $7, updated_at = NOW()
@@ -349,12 +322,12 @@ router.patch('/:id', authenticateToken, async (req, res) => {
 });
 
 // DELETE /api/v1/payments/:id
-router.delete('/:id', authenticateToken, async (req, res) => {
+router.delete('/:id', authenticate, async (req, res) => {
   try {
     const { id } = req.params;
     const relationshipId = await getRelationshipId(req.user.id);
 
-    await db.query(
+    await query(
       `DELETE FROM child_support_payments WHERE id = $1 AND relationship_id = $2`,
       [id, relationshipId]
     );
@@ -365,14 +338,5 @@ router.delete('/:id', authenticateToken, async (req, res) => {
     res.status(500).json({ error: 'Could not delete payment.' });
   }
 });
-
-module.exports = router;
-
-/**
- * MOUNT THIS in your main server file (e.g. index.js / app.js) with:
- *
- *   const paymentsRoutes = require('./routes/payments.routes');
- *   app.use('/api/v1/payments', paymentsRoutes);
- */
 
 module.exports = router;
