@@ -16,7 +16,7 @@
 const { logger } = require('../utils/logger');
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
-const EMAIL_FROM = process.env.EMAIL_FROM || 'Accordly <noreply@accordlyparent.com>';
+const EMAIL_FROM = process.env.EMAIL_FROM || 'Accordly <info@accordlyapp.com>';
 
 async function sendEmail({ to, subject, html }) {
   if (!RESEND_API_KEY) {
